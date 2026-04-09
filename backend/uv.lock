@@ -563,6 +563,24 @@ wheels = [
 ]
 
 [[package]]
+name = "codebuddy-agent-sdk"
+version = "0.3.119"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/14/3e13cec3a8e463e827a1cbf754323aa2b26006f6d1e5bcd2d4d357b8719d/codebuddy_agent_sdk-0.3.119-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:369c20d312a241da3203f7df34f5be15c8295fe7b95015092790999eb20e2ee2", size = 32032754, upload-time = "2026-04-08T17:22:21.617Z" },
+    { url = "https://files.pythonhosted.org/packages/75/b3/9d9c89bf7f18d9c4779a90e612707fa9c555e386abcd98ed8fb45deb98bb/codebuddy_agent_sdk-0.3.119-py3-none-macosx_11_0_arm64.whl", hash = "sha256:7a347318a177506155efda1d1478e9d3937fbff28992e6d752a5f763d3a5e5b6", size = 29677635, upload-time = "2026-04-08T17:22:33.949Z" },
+    { url = "https://files.pythonhosted.org/packages/72/0a/f042157904dbae22f60dd569921fa4623a1ef2cfd031cf80c227e3eb2b9d/codebuddy_agent_sdk-0.3.119-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:f9d5200942330758e3a68ae679c51ade544480c46f07c8423495ebe9db4f4ba6", size = 45480946, upload-time = "2026-04-08T17:22:50.273Z" },
+    { url = "https://files.pythonhosted.org/packages/11/db/3155a949772ba103c37796fb8ada0e7e2b2c978be30176b684faa4b1d749/codebuddy_agent_sdk-0.3.119-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:d3360b2856f2cd88630b05fd14975dcc7577bc20981b1c30925e4be06550e371", size = 46059084, upload-time = "2026-04-08T17:23:09.917Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/7e/954b68660b8e0023db9ed1c432e7370df26617e6bdb7673cef62b044d30d/codebuddy_agent_sdk-0.3.119-py3-none-musllinux_1_1_aarch64.whl", hash = "sha256:4eb3216c85dfb2131752421c175c0b06814da5fef5e565fed09c070a805b2a86", size = 42941321, upload-time = "2026-04-08T17:23:25.877Z" },
+    { url = "https://files.pythonhosted.org/packages/44/2e/c44f893b3d9566438e40a66931a39f280d1b054fad6c0ba96f6e9984b392/codebuddy_agent_sdk-0.3.119-py3-none-musllinux_1_1_x86_64.whl", hash = "sha256:b69eed18d0e383b9e94965c2ab7516101879790612d9d1a70c71033928010ef0", size = 43266078, upload-time = "2026-04-08T17:23:42.936Z" },
+    { url = "https://files.pythonhosted.org/packages/54/f8/35f8ee015470475a5a0cb097a5ef3ccd0bf00dd89b7425ba4f293b24a9a1/codebuddy_agent_sdk-0.3.119-py3-none-win_amd64.whl", hash = "sha256:fcc2cce2fa90a96e2a210bcaf060edea92992f32fefc6551e6d3fc497d0c1d42", size = 48569102, upload-time = "2026-04-08T17:23:59.444Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -719,6 +737,7 @@ source = { editable = "packages/harness" }
 dependencies = [
     { name = "agent-client-protocol" },
     { name = "agent-sandbox" },
+    { name = "codebuddy-agent-sdk" },
     { name = "ddgs" },
     { name = "dotenv" },
     { name = "duckdb" },
@@ -757,6 +776,7 @@ pymupdf = [
 requires-dist = [
     { name = "agent-client-protocol", specifier = ">=0.4.0" },
     { name = "agent-sandbox", specifier = ">=0.0.19" },
+    { name = "codebuddy-agent-sdk", specifier = ">=0.1.0" },
     { name = "ddgs", specifier = ">=9.10.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "duckdb", specifier = ">=1.4.4" },
