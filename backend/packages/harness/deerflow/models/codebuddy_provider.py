@@ -42,6 +42,11 @@ from pydantic import Field
 
 logger = logging.getLogger(__name__)
 
+# Fixed working directory for the CodeBuddy CLI subprocess.  We must not
+# call os.getcwd() anywhere (even at module level) because LangGraph's
+# blockbuster library intercepts it as a blocking call.
+_SUBPROCESS_CWD: str = "/"
+
 # Import CodeBuddy SDK
 try:
     from codebuddy_agent_sdk import (
@@ -132,11 +137,14 @@ class CodeBuddyChatModel(BaseChatModel):
         # Convert LangChain messages to prompt
         prompt = self._convert_messages_to_prompt(messages)
 
-        # Build options
+        # Build options – use cached cwd to avoid the SDK calling
+        # os.getcwd() which is a synchronous blocking call that breaks
+        # the ASGI event loop in LangGraph.
         options = CodeBuddyAgentOptions(
             model=self.model,
             permission_mode=self.permission_mode,
             max_turns=self.max_turns,
+            cwd=_SUBPROCESS_CWD,
         )
 
         # Execute query
@@ -189,6 +197,7 @@ class CodeBuddyChatModel(BaseChatModel):
             model=self.model,
             permission_mode=self.permission_mode,
             max_turns=self.max_turns,
+            cwd=_SUBPROCESS_CWD,
         )
 
         current_text = ""
@@ -299,6 +308,7 @@ class CodeBuddyChatModelWithSession(BaseChatModel):
                 model=self.model,
                 permission_mode=self.permission_mode,
                 max_turns=self.max_turns,
+                cwd=_SUBPROCESS_CWD,
             )
             self._client = CodeBuddySDKClient(options=options)
             await self._client.__aenter__()
