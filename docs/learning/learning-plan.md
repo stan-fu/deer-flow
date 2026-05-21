@@ -24,14 +24,35 @@ make install
 make dev
 ```
 
+> **重要**：始终通过 `http://localhost:2026` 访问，而不是 `localhost:3000`。
+> 2026 是 nginx 反向代理入口，所有请求在此统一路由；3000 是裸 Next.js，无法处理后端 API 路由。
+
+**启动模式说明**：
+
+| 命令 | 启动服务 | 适用场景 |
+|------|---------|---------|
+| `make dev` | LangGraph(2024) + Gateway(8001) + Frontend(3000) + Nginx(2026) | 标准开发 |
+| `make dev-pro` | Gateway(8001) + Frontend(3000) + Nginx(2026)，无 LangGraph | 测试 Gateway 模式/自定义 Provider |
+
+**请求路由架构**（`dev-pro` 模式）：
+
+```
+浏览器 → localhost:2026 (Nginx)
+              ├── /api/*                → Gateway:8001 (FastAPI，含 /api/models)
+              ├── /api/langgraph-compat/* → Gateway:8001 (embedded agent runtime)
+              └── 其他                  → Frontend:3000 (Next.js)
+```
+
 **阅读顺序**：
 
 1. `README_zh.md` — 了解设计理念
 2. `config.example.yaml` — 理解所有配置项（LLM/工具/Agent/Skills/Memory）
-3. `backend/app/gateway/app.py` — 看所有路由注册，建立 API 全貌
-4. `backend/packages/harness/deerflow/client.py` — 入口，理解内嵌 Client 设计
+3. `docker/nginx/nginx.local.conf` — nginx 反向代理规则，理解路由分发
+4. `scripts/serve.sh` — 启动脚本，理解各服务如何协作、`.env.local` 如何被自动管理
+5. `backend/app/gateway/app.py` — 看所有路由注册，建立 API 全貌
+6. `backend/packages/harness/deerflow/client.py` — 入口，理解内嵌 Client 设计
 
-**产出**：画出模块依赖图（手绘即可）
+**产出**：画出服务拓扑图（Nginx/Gateway/LangGraph/Frontend 的端口与路由关系）
 
 ---
 
