@@ -156,52 +156,46 @@ serve.sh 是 DeerFlow 的统一服务启动器，负责协调所有服务的生�
 - LangGraph 不热重载
 
 ### 服务架构
-标准模式
+
+浏览器通过统一入口 **Nginx (:2026)** 访问，各内部服务端口不直接对外暴露。Nginx 按路径分发：
+
 ```
-http://localhost:2026
-       │
-    Nginx :2026 (反向代理)
-    ├── /api/langgraph/* → LangGraph :2024 (Agent Runtime)
-    └── /api/*          → Gateway    :8001 (REST API)
-       Frontend          :3000 (Next.js)
+浏览器 ──→ localhost:2026 (Nginx)
+              │
+              ├── /api/langgraph/*  →  LangGraph :2024   ← Agent 运行时
+              ├── /api/*            →  Gateway :8001     ← 配置与管理
+              └── /*                →  Frontend :3000    ← Web 页面
 ```
 
-Gateway 模式(跳过LangGraph)
-```
-http://localhost:2026
-       │
-    Nginx :2026
-    ├── /api/langgraph-compat/* → Gateway :8001 (内嵌 Agent Runtime)
-    └── /api/*                  → Gateway :8001
-       Frontend :3000
-```
+> **为什么不是"前端先路由再转发后端"？** 前端的 3000 和 Gateway 的 8001 都是内部端口，Nginx 同时代理前端页面和后端 API。关键是 Agent 回复是逐 token 流式推送的（SSE），Nginx（C 实现）处理流式代理比 Node.js 稳定高效；且浏览器只访问 2026 一个端口，所有 API 用相对路径，天然同源无跨域。
 
-### 启动流程
-```
-1. 加载 .env 环境变量
-2. 停止现有服务 (stop_all)
-3. 检查配置文件 (config.yaml)
-4. 执行配置升级 (config-upgrade.sh)
-5. 安装依赖
-   ├── backend: uv sync
-   └── frontend: pnpm install
-6. 同步 frontend/.env.local
-   ├── Gateway 模式: NEXT_PUBLIC_LANGGRAPH_BASE_URL=/api/langgraph-compat
-   └── 标准模式:     移除该变量（回退到 /api/langgraph）
-7. 顺序启动服务（每个服务等待端口就绪后才启动下一个）
-   ├── LangGraph :2024  (超时 60s，Gateway 模式跳过)
-   ├── Gateway   :8001  (超时 30s)
-   ├── Frontend  :3000  (超时 120s)
-   └── Nginx     :2026  (超时 10s)
-```
+#### 两种运行模式
 
-### 各服务端口速查
-| 服务 | 端口 | 进程 |
-|------|------|------|
-| LangGraph | 2024 | `uv run langgraph dev` |
-| Gateway API | 8001 | `uvicorn app.gateway.app:app` |
-| Frontend | 3000 | Next.js dev/preview |
-| Nginx | 2026 | 反向代理（对外统一入口） |
+| | 标准模式（`make dev`） | Gateway 模式（`make dev-pro`） |
+|---|---|---|
+| **进程** | 4（LangGraph + Gateway + Frontend + Nginx） | 3（跳过 LangGraph） |
+| **Agent 运行时** | LangGraph Server 独立进程 | Gateway 内嵌 Agent Runtime |
+| **路由** | `/api/langgraph/*` → LangGraph :2024 | `/api/langgraph/*` → Gateway :8001 |
+
+#### Gateway vs LangGraph 能力划分
+
+| 职责域 | LangGraph (:2024) | Gateway (:8001) |
+|---|---|---|
+| **对话执行** | ✅ 决策循环 + SSE 流式输出 | — |
+| **对话线程** | ✅ Thread 增删改查、状态快照 | ✅ 本地文件清理 |
+| **工具调用** | ✅ 内置工具 + MCP 工具 + 配置工具 | — |
+| **中间件链** | ✅ 沙箱初始化、摘要压缩、记忆注入等 | — |
+| **Checkpoint** | ✅ 断点持久化（SQLite/Postgres） | — |
+| **模型管理** | — | ✅ 列表、详情 |
+| **MCP 配置** | — | ✅ 增删改、热重载 |
+| **Skills 管理** | — | ✅ 安装/启用/删除/回滚 |
+| **记忆管理** | — | ✅ 事实增删改、导入导出 |
+| **文件上传** | — | ✅ 上传 + 自动转 Markdown |
+| **Artifact** | — | ✅ Agent 生成文件下载 |
+| **Agent 配置** | — | ✅ 自定义 Agent CRUD |
+| **IM 渠道** | — | ✅ 飞书/Slack/Telegram 管理 |
+
+**一句话**：LangGraph 管"跑 Agent"，Gateway 管"配系统"。
 
 ## 内嵌client设计
 > `backend/packages/harness/deerflow/client.py`
