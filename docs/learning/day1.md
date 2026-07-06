@@ -125,3 +125,159 @@ Agent 决定调用工具
     - 官方provider：直接引入LangChain官方包
   - 其他：具体的模型配置
 - im channels：支持多种IM渠道
+
+# nignx代理规则
+见 `docker/nginx/nginx.local.conf`，路由规则具体见注释
+
+# 服务协作
+## 服务启动 - serve.sh
+serve.sh 是 DeerFlow 的统一服务启动器，负责协调所有服务的生命周期管理（启动 / 停止 / 重启）
+
+### 命令行参数
+| 参数 | 说明 |
+|------|------|
+| `--dev` | 开发模式，热重载（默认） |
+| `--prod` | 生产模式，无热重载，使用预构建前端 |
+| `--gateway` | Gateway 模式（实验性），跳过 LangGraph 独立进程 |
+| `--daemon` | 后台运行（nohup），启动后主进程退出 |
+| `--skip-install` | 跳过依赖安装，加速重启 |
+| `--stop` | 停止所有服务 |
+| `--restart` | 先停止再以指定模式重启 |
+注：热加载包括前后端热加载
+- Frontend 热重载（pnpm run dev）
+  - Next.js 开发服务器的标准 HMR（Hot Module Replacement），监听：
+    - frontend/ 下所有 .tsx / .ts / .css 等源码文件
+    - 保存即刷新，无需重启进程
+- Backend 热重载（Gateway，--reload flags）
+  - uvicorn 的 --reload 模式，只在 dev + 非 daemon 模式下启用，监听：
+    - backend/ 下所有 .py 文件（uvicorn 默认）
+    - 额外包含：*.yaml、.env
+    - 排除：*.pyc、__pycache__/、sandbox/、.deer-flow/
+- LangGraph 不热重载
+
+### 服务架构
+标准模式
+```
+http://localhost:2026
+       │
+    Nginx :2026 (反向代理)
+    ├── /api/langgraph/* → LangGraph :2024 (Agent Runtime)
+    └── /api/*          → Gateway    :8001 (REST API)
+       Frontend          :3000 (Next.js)
+```
+
+Gateway 模式(跳过LangGraph)
+```
+http://localhost:2026
+       │
+    Nginx :2026
+    ├── /api/langgraph-compat/* → Gateway :8001 (内嵌 Agent Runtime)
+    └── /api/*                  → Gateway :8001
+       Frontend :3000
+```
+
+### 启动流程
+```
+1. 加载 .env 环境变量
+2. 停止现有服务 (stop_all)
+3. 检查配置文件 (config.yaml)
+4. 执行配置升级 (config-upgrade.sh)
+5. 安装依赖
+   ├── backend: uv sync
+   └── frontend: pnpm install
+6. 同步 frontend/.env.local
+   ├── Gateway 模式: NEXT_PUBLIC_LANGGRAPH_BASE_URL=/api/langgraph-compat
+   └── 标准模式:     移除该变量（回退到 /api/langgraph）
+7. 顺序启动服务（每个服务等待端口就绪后才启动下一个）
+   ├── LangGraph :2024  (超时 60s，Gateway 模式跳过)
+   ├── Gateway   :8001  (超时 30s)
+   ├── Frontend  :3000  (超时 120s)
+   └── Nginx     :2026  (超时 10s)
+```
+
+### 各服务端口速查
+| 服务 | 端口 | 进程 |
+|------|------|------|
+| LangGraph | 2024 | `uv run langgraph dev` |
+| Gateway API | 8001 | `uvicorn app.gateway.app:app` |
+| Frontend | 3000 | Next.js dev/preview |
+| Nginx | 2026 | 反向代理（对外统一入口） |
+
+## 内嵌client设计
+> `backend/packages/harness/deerflow/client.py`
+
+
+## 路由注册
+具体见：`backend/app/gateway/app.py`
+以`app.include_router(models.router)`为例，添加models.router中的路径，也就是
+- 前缀为`/api`：router = APIRouter(prefix="/api", tags=["models"])
+- 路径包括
+  - "/models"
+  - "/models/{model_name}"
+
+完整的路由如下：
+| Method | 路径 | 说明 | Router 文件 |
+|--------|------|------|------------|
+| GET | `/api/models` | 列出所有模型 | models |
+| GET | `/api/models/{model_name}` | 获取指定模型详情 | models |
+| GET | `/api/mcp/config` | 获取 MCP 配置 | mcp |
+| PUT | `/api/mcp/config` | 更新 MCP 配置 | mcp |
+| GET | `/api/memory` | 获取记忆数据 | memory |
+| POST | `/api/memory/reload` | 重新加载记忆 | memory |
+| DELETE | `/api/memory` | 清空记忆 | memory |
+| POST | `/api/memory/facts` | 添加事实 | memory |
+| DELETE | `/api/memory/facts/{fact_id}` | 删除指定事实 | memory |
+| PATCH | `/api/memory/facts/{fact_id}` | 更新指定事实 | memory |
+| GET | `/api/memory/export` | 导出记忆 | memory |
+| POST | `/api/memory/import` | 导入记忆 | memory |
+| GET | `/api/memory/config` | 获取记忆配置 | memory |
+| GET | `/api/memory/status` | 获取记忆状态 | memory |
+| GET | `/api/skills` | 列出所有 skill | skills |
+| POST | `/api/skills/install` | 安装 skill | skills |
+| GET | `/api/skills/custom` | 列出自定义 skill | skills |
+| GET | `/api/skills/custom/{skill_name}` | 获取自定义 skill 内容 | skills |
+| PUT | `/api/skills/custom/{skill_name}` | 编辑自定义 skill | skills |
+| DELETE | `/api/skills/custom/{skill_name}` | 删除自定义 skill | skills |
+| GET | `/api/skills/custom/{skill_name}/history` | 获取自定义 skill 历史 | skills |
+| POST | `/api/skills/custom/{skill_name}/rollback` | 回滚自定义 skill | skills |
+| GET | `/api/skills/{skill_name}` | 获取指定 skill 详情 | skills |
+| PUT | `/api/skills/{skill_name}` | 更新指定 skill 启用状态 | skills |
+| GET | `/api/threads/{thread_id}/artifacts/{path:path}` | 获取 artifact 文件 | artifacts |
+| POST | `/api/threads/{thread_id}/uploads` | 上传文件 | uploads |
+| GET | `/api/threads/{thread_id}/uploads/list` | 列出已上传文件 | uploads |
+| DELETE | `/api/threads/{thread_id}/uploads/{filename}` | 删除上传文件 | uploads |
+| POST | `/api/threads` | 创建 thread | threads |
+| POST | `/api/threads/search` | 搜索 thread | threads |
+| GET | `/api/threads/{thread_id}` | 获取 thread | threads |
+| PATCH | `/api/threads/{thread_id}` | 更新 thread | threads |
+| DELETE | `/api/threads/{thread_id}` | 删除 thread | threads |
+| GET | `/api/threads/{thread_id}/state` | 获取 thread 状态 | threads |
+| POST | `/api/threads/{thread_id}/state` | 更新 thread 状态 | threads |
+| POST | `/api/threads/{thread_id}/history` | 获取 thread 历史 | threads |
+| GET | `/api/agents` | 列出所有 agent | agents |
+| GET | `/api/agents/check` | 检查 agent 配置 | agents |
+| GET | `/api/agents/{name}` | 获取指定 agent | agents |
+| POST | `/api/agents` | 创建 agent | agents |
+| PUT | `/api/agents/{name}` | 更新 agent | agents |
+| DELETE | `/api/agents/{name}` | 删除 agent | agents |
+| GET | `/api/user-profile` | 获取用户 profile | agents |
+| PUT | `/api/user-profile` | 更新用户 profile | agents |
+| POST | `/api/threads/{thread_id}/suggestions` | 生成对话建议 | suggestions |
+| GET | `/api/channels/` | 获取 IM channel 状态 | channels |
+| POST | `/api/channels/{name}/restart` | 重启指定 channel | channels |
+| POST | `/api/assistants/search` | 搜索 assistant（兼容层） | assistants_compat |
+| GET | `/api/assistants/{assistant_id}` | 获取 assistant（兼容层） | assistants_compat |
+| GET | `/api/assistants/{assistant_id}/graph` | 获取 assistant graph | assistants_compat |
+| GET | `/api/assistants/{assistant_id}/schemas` | 获取 assistant schemas | assistants_compat |
+| POST | `/api/threads/{thread_id}/runs` | 创建 run | thread_runs |
+| POST | `/api/threads/{thread_id}/runs/stream` | 流式 run | thread_runs |
+| POST | `/api/threads/{thread_id}/runs/wait` | 等待 run 完成 | thread_runs |
+| GET | `/api/threads/{thread_id}/runs` | 列出 runs | thread_runs |
+| GET | `/api/threads/{thread_id}/runs/{run_id}` | 获取指定 run | thread_runs |
+| POST | `/api/threads/{thread_id}/runs/{run_id}/cancel` | 取消 run | thread_runs |
+| GET | `/api/threads/{thread_id}/runs/{run_id}/join` | 等待 run 结束 | thread_runs |
+| GET/POST | `/api/threads/{thread_id}/runs/{run_id}/stream` | 流式获取 run 结果 | thread_runs |
+| POST | `/api/runs/stream` | 无状态流式 run | runs |
+| POST | `/api/runs/wait` | 无状态等待 run | runs |
+| GET | `/health` | 健康检查 | app.py 内联 |
+

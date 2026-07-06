@@ -12,7 +12,10 @@
         "packageManager": "ms-python.python:pip",
         "workspace": "deer-flow"
       }
-    ]
+    ],
+    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+    "python.analysis.extraPaths": ["${workspaceFolder}/backend"],
+    "pyright.pythonPath": "${workspaceFolder}/backend/.venv/bin/python"
   },
   "launch": {
     "version": "0.2.0",
