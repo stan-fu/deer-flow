@@ -784,7 +784,7 @@ requires-dist = [
     { name = "firecrawl-py", specifier = ">=1.15.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "kubernetes", specifier = ">=30.0.0" },
-    { name = "langchain", specifier = ">=1.2.3" },
+    { name = "langchain", specifier = ">=1.2.4" },
     { name = "langchain-anthropic", specifier = ">=1.3.4" },
     { name = "langchain-deepseek", specifier = ">=1.0.1" },
     { name = "langchain-google-genai", specifier = ">=4.2.1" },
@@ -1556,16 +1556,16 @@ wheels = [
 
 [[package]]
 name = "langchain"
-version = "1.2.3"
+version = "1.2.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-core" },
     { name = "langgraph" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/78/9565319259d92818d96f30d55507ee1072fbf5c008b95a6acecf5e47c4d6/langchain-1.2.3.tar.gz", hash = "sha256:9d6171f9c3c760ca3c7c2cf8518e6f8625380962c488b41e35ebff1f1d611077", size = 548296, upload-time = "2026-01-08T20:26:30.149Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/16/22/a4d4ac98fc2e393537130bbfba0d71a8113e6f884d96f935923e247397fe/langchain-1.2.10.tar.gz", hash = "sha256:bdcd7218d9c79a413cf15e106e4eb94408ac0963df9333ccd095b9ed43bf3be7", size = 570071, upload-time = "2026-02-10T14:56:49.74Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/e5/9b4f58533f8ce3013b1a993289eb11e8607d9c9d9d14699b29c6ac3b4132/langchain-1.2.3-py3-none-any.whl", hash = "sha256:5cdc7c80f672962b030c4b0d16d0d8f26d849c0ada63a4b8653a20d7505512ae", size = 106428, upload-time = "2026-01-08T20:26:29.162Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/06/c3394327f815fade875724c0f6cff529777c96a1e17fea066deb997f8cf5/langchain-1.2.10-py3-none-any.whl", hash = "sha256:e07a377204451fffaed88276b8193e894893b1003e25c5bca6539288ccca3698", size = 111738, upload-time = "2026-02-10T14:56:47.985Z" },
 ]
 
 [[package]]
@@ -3596,8 +3596,8 @@ name = "standard-aifc"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
-    { name = "standard-chunk", marker = "python_full_version >= '3.13'" },
+    { name = "audioop-lts" },
+    { name = "standard-chunk" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/53/6050dc3dde1671eb3db592c13b55a8005e5040131f7509cef0215212cb84/standard_aifc-3.13.0.tar.gz", hash = "sha256:64e249c7cb4b3daf2fdba4e95721f811bde8bdfc43ad9f936589b7bb2fae2e43", size = 15240, upload-time = "2024-10-30T16:01:31.772Z" }
 wheels = [
