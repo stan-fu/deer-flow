@@ -146,7 +146,395 @@ Bootstrap 模式是一个**精简版 Agent**，只包含 `setup_agent` 工具，
 
 ---
 
-## 三、SubAgent 系统详细设计
+## 三、工具构建全链路：以 `task_tool` 为例
+
+> **目标**：理解一个 Python 函数如何通过 `@tool` 装饰器变成 LLM 可调用的工具，以及 LLM 如何通过它创建 SubAgent。
+
+本节以 [task_tool.py](/Users/cooper/workload/deer-flow/backend/packages/harness/deerflow/tools/builtins/task_tool.py) 为案例，从装饰器 → Schema 生成 → 工具注册 → LLM 交互 → SubAgent 创建，完整走一遍链路。
+
+### 3.1 起点：`@tool` 装饰器做了什么
+
+```python
+# task_tool.py
+@tool("task", parse_docstring=True)
+async def task_tool(
+    runtime: ToolRuntime[ContextT, ThreadState],
+    description: str,
+    prompt: str,
+    subagent_type: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    max_turns: int | None = None,
+) -> str:
+    """Delegate a task to a specialized subagent that runs in its own context.
+    ...
+    Args:
+        description: A short (3-5 word) description...
+        prompt: The task description for the subagent...
+        subagent_type: The type of subagent to use...
+        max_turns: Optional maximum number of agent turns...
+    """
+```
+
+`@tool("task", parse_docstring=True)` 调用链路：
+
+```
+@tool("task", parse_docstring=True)
+    │
+    └─→ langchain_core/tools/convert.py: tool()
+        │
+        └─→ _create_tool_factory("task")
+            │
+            └─→ StructuredTool.from_function(
+                    func=None,           # 异步函数用 coroutine 参数
+                    coroutine=task_tool,
+                    name="task",
+                    infer_schema=True,   # 默认开启
+                    parse_docstring=True # ← 关键！解析 docstring
+                )
+                │
+                └─→ create_schema_from_function(
+                        "task",
+                        task_tool,
+                        parse_docstring=True
+                    )
+```
+
+`create_schema_from_function()` 做了三件事：
+
+1. **从函数签名提取参数类型** → Pydantic Field（`description: str` → `Field(type="string")`）
+2. **解析 Google-style docstring** 的 `Args:` 段落 → 每个参数的 `description`
+3. **过滤注入参数**：`runtime`（`ToolRuntime`）、`tool_call_id`（`InjectedToolCallId`）等由框架注入的参数**不会**出现在生成的 Schema 中
+
+### 3.2 生成的 Schema 长什么样
+
+经过 `@tool` 处理后的 `task_tool` 是一个 `StructuredTool` 实例，其 `args_schema` 是一个 Pydantic Model，大致等价于：
+
+```python
+class TaskToolInput(BaseModel):
+    """Delegate a task to a specialized subagent that runs in its own context.
+
+    Subagents help you:
+    - Preserve context by keeping exploration and implementation separate
+    - Handle complex multi-step tasks autonomously
+    ...
+    """
+
+    description: str = Field(
+        description="A short (3-5 word) description of the task for logging/display."
+    )
+    prompt: str = Field(
+        description="The task description for the subagent. Be specific and clear..."
+    )
+    subagent_type: str = Field(
+        description="The type of subagent to use."
+    )
+    max_turns: int | None = Field(
+        default=None,
+        description="Optional maximum number of agent turns."
+    )
+```
+
+`args_schema.model_json_schema()` 生成的 **JSON Schema** 就是发送给 LLM 的工具定义：
+
+```json
+{
+  "name": "task",
+  "description": "Delegate a task to a specialized subagent that runs in its own context.\n\nSubagents help you:\n- Preserve context by keeping exploration and implementation separate\n- Handle complex multi-step tasks autonomously\n...",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "description": {
+        "type": "string",
+        "description": "A short (3-5 word) description of the task..."
+      },
+      "prompt": {
+        "type": "string",
+        "description": "The task description for the subagent..."
+      },
+      "subagent_type": {
+        "type": "string",
+        "description": "The type of subagent to use."
+      },
+      "max_turns": {
+        "type": "integer",
+        "description": "Optional maximum number of agent turns."
+      }
+    },
+    "required": ["description", "prompt", "subagent_type"]
+  }
+}
+```
+
+**关键点**：
+- `description`（顶层）来自 docstring 的 summary 部分 → LLM 据此判断"这个工具是用来做什么的"
+- `properties` 中的 `description` 来自 docstring `Args:` 段落 → LLM 据此理解每个参数的含义
+- `required` 由函数签名中无默认值的参数决定
+- `runtime` 和 `tool_call_id` **不出现在 Schema 中**，它们由框架在运行时注入
+
+### 3.3 工具注册：如何进入 Agent 的工具箱
+
+```
+task_tool.py  →  builtins/__init__.py  →  tools.py  →  make_lead_agent()
+                                                           │
+                                              get_available_tools(subagent_enabled=True)
+```
+
+**[builtins/\_\_init\_\_.py](/Users/cooper/workload/deer-flow/backend/packages/harness/deerflow/tools/builtins/__init__.py)** 导出：
+
+```python
+from .task_tool import task_tool
+```
+
+**[tools.py](/Users/cooper/workload/deer-flow/backend/packages/harness/deerflow/tools/tools.py)** 中的注册逻辑：
+
+```python
+SUBAGENT_TOOLS = [
+    task_tool,
+    # task_status_tool is no longer exposed to LLM (backend handles polling internally)
+]
+
+def get_available_tools(..., subagent_enabled: bool = False) -> list[BaseTool]:
+    # ...
+    if subagent_enabled:
+        builtin_tools.extend(SUBAGENT_TOOLS)  # ← 条件性添加
+    # ...
+```
+
+**关键设计**：`task_tool` 只在 `subagent_enabled=True` 时才加入工具列表。这意味着：
+- 普通模式下，Lead Agent 的工具列表**不包含** `task`，LLM 无法委托 SubAgent
+- 当 `subagent_enabled=True` 时，`task` 工具出现，同时 `<subagent_system>` prompt 段也被注入
+
+### 3.4 LLM 视角：它"看到"了什么
+
+当 Agent 框架调用 LLM 时，工具列表被转换为 JSON Schema 放在 API 请求的 `tools` 字段中。LLM 同时收到：
+
+**① 工具定义（JSON Schema）**：上一节生成的 JSON Schema，告知 LLM 工具名称、用途、参数
+
+**② System Prompt（`<subagent_system>` 段落）**：引导 LLM 何时以及如何使用 `task` 工具：
+
+```
+<subagent_system>
+**🚀 SUBAGENT MODE ACTIVE - DECOMPOSE, DELEGATE, SYNTHESIZE**
+
+You are running with subagent capabilities enabled. Your role is a **task orchestrator**:
+1. **DECOMPOSE**: Break complex tasks into parallel sub-tasks
+2. **DELEGATE**: Launch multiple subagents simultaneously using parallel `task` calls
+3. **SYNTHESIZE**: Collect and integrate results into a coherent answer
+
+⛔ HARD CONCURRENCY LIMIT: MAXIMUM 3 `task` CALLS PER RESPONSE.
+...
+
+✅ USE Parallel Subagents when: ... (复杂研究、多维度分析、大型代码库)
+❌ DO NOT use subagents when: ... (单文件读取、简单编辑、需要用户澄清)
+```
+
+**③ 对话历史**：之前的 user 消息和 assistant 回复
+
+这三者共同构成了 LLM 的完整上下文，LLM 据此决定：
+- 要不要调用 `task` 工具？
+- 如果要，拆成几个子任务？
+- 每个子任务的 `description` 和 `prompt` 分别是什么？
+
+### 3.5 LLM → 框架：ToolCall 的生成与解析
+
+当 LLM 决定使用 `task` 工具时，它返回一个 ToolCall：
+
+```python
+# LLM 返回 (在 AIMessage.tool_calls 中)
+ToolCall = {
+    "name": "task",
+    "args": {
+        "description": "分析日志文件",
+        "prompt": "找出 /var/log 下所有 ERROR 级别的日志，按服务分类统计",
+        "subagent_type": "general-purpose"
+    },
+    "id": "call_abc123",
+    "type": "tool_call"
+}
+```
+
+框架的解析流程：
+
+```
+                    ToolCall dict
+                    {"name":"task", "args":{...}, "id":"call_abc123"}
+                           │
+          ┌────────────────┼────────────────┐
+          │  _prep_run_args()               │
+          │  tool_input  = value["args"]     │  ← 拆出 "args"
+          │  tool_call_id = value["id"]      │  ← 拆出 "id"
+          └────────────────┬────────────────┘
+                           │
+                           ▼
+              tool_input = {"description": "分析日志文件",
+                             "prompt": "找出 /var/log 下...",
+                             "subagent_type": "general-purpose"}
+                           │
+          ┌────────────────┼────────────────┐
+          │  _parse_input(tool_input,        │
+          │               tool_call_id)      │
+          │                                 │
+          │  ① 检测 InjectedToolCallId       │
+          │     → tool_input["tool_call_id"]  │ ← 注入 "call_abc123"
+          │       = "call_abc123"            │
+          │  ② args_schema.model_validate()  │ ← Pydantic 校验类型
+          └────────────────┬────────────────┘
+                           │
+                           ▼
+              tool_input = {"description": "...",
+                             "prompt": "...",
+                             "subagent_type": "general-purpose",
+                             "tool_call_id": "call_abc123"}  ← 已注入
+                           │
+          ┌────────────────┼────────────────┐
+          │  _to_args_and_kwargs()           │
+          │  return (), tool_input           │  ← 全部作为 kwargs
+          └────────────────┬────────────────┘
+                           │
+                           ▼
+              self._run(**tool_input)
+              → task_tool(description="分析日志文件",
+                          prompt="找出 /var/log 下...",
+                          subagent_type="general-purpose",
+                          tool_call_id="call_abc123",
+                          runtime=...)    ← 框架注入
+```
+
+**关键点**：
+- LLM 返回的 `args` 只包含**业务参数**（`description`、`prompt`、`subagent_type`、`max_turns`）
+- `tool_call_id` 从 ToolCall 的 `id` 字段提取后注入到 `tool_input` 中（对应 `InjectedToolCallId` 注解）
+- `runtime` 由框架从 Agent 运行时状态构造并注入（对应 `ToolRuntime` 注解）
+- `args_schema.model_validate()` 做类型校验（str 是 str 吗？必填字段都提供了吗？）
+
+### 3.6 task_tool 内部：创建并执行 SubAgent
+
+当 `task_tool()` 函数体开始执行时，流程如下：
+
+```
+task_tool(description, prompt, subagent_type, tool_call_id, runtime, max_turns)
+    │
+    ├─ 1. 获取 SubagentConfig
+    │     config = get_subagent_config(subagent_type)  # general-purpose → {max_turns:100, timeout:900s, ...}
+    │     若 subagent_type=="bash" 但沙箱不支持 → 返回错误
+    │
+    ├─ 2. 从 runtime 提取父 Agent 上下文
+    │     sandbox_state = runtime.state.get("sandbox")      # 沙箱环境
+    │     thread_data   = runtime.state.get("thread_data")  # 工作目录
+    │     thread_id     = runtime.context.get("thread_id")  # 线程 ID
+    │     parent_model  = runtime.config["metadata"]["model_name"]
+    │     trace_id      = runtime.config["metadata"]["trace_id"]
+    │
+    ├─ 3. 获取工具列表（禁用 subagent 防止递归嵌套）
+    │     from deerflow.tools import get_available_tools
+    │     tools = get_available_tools(model_name=parent_model, subagent_enabled=False)
+    │                                         # ↑ subagent_enabled=False → 移除 task 工具
+    │
+    ├─ 4. 创建 SubagentExecutor
+    │     executor = SubagentExecutor(
+    │         config=config,
+    │         tools=tools,           # 过滤后的工具列表
+    │         parent_model=...,      # 继承父模型
+    │         sandbox_state=...,     # 共享沙箱
+    │         thread_data=...,       # 共享工作目录
+    │         thread_id=...,
+    │         trace_id=...,
+    │     )
+    │
+    ├─ 5. 异步启动 SubAgent 执行
+    │     task_id = executor.execute_async(prompt, task_id=tool_call_id)
+    │     # ↑ 用 tool_call_id 作为 task_id，便于追踪
+    │
+    ├─ 6. 轮询等待结果 + 推送 SSE 进度事件
+    │     writer({"type": "task_started", ...})    # 向前端推送 "开始"
+    │     while True:
+    │         result = get_background_task_result(task_id)
+    │         检查新消息 → writer({"type": "task_running", ...})  # 实时进度
+    │         检查状态：
+    │           COMPLETED → writer({"type": "task_completed", ...}) → return result
+    │           FAILED/TIMED_OUT/CANCELLED → return error
+    │         await asyncio.sleep(5)
+    │
+    └─ 7. 返回结果给 Lead Agent
+          return "Task Succeeded. Result: ..."  # 作为 ToolMessage 注入对话
+```
+
+### 3.7 SubagentExecutor 内部：独立的 Agent 实例
+
+`SubagentExecutor._create_agent()` 创建一个**全新的、独立的** Agent 实例：
+
+```python
+def _create_agent(self):
+    model = create_chat_model(name=parent_model, thinking_enabled=False)
+    # thinking_enabled=False：SubAgent 是执行者，无需深度推理
+
+    return create_agent(
+        model=model,
+        tools=self.tools,                    # 已过滤的工具列表
+        middleware=middlewares,               # 独立的中间件链
+        system_prompt=self.config.system_prompt,  # SubAgent 自己的 prompt
+        state_schema=ThreadState,
+    )
+```
+
+`_build_initial_state()` 将任务描述包装为初始消息：
+
+```python
+def _build_initial_state(self, task):
+    state = {"messages": [HumanMessage(content=task)]}
+    if self.sandbox_state:
+        state["sandbox"] = self.sandbox_state   # 继承父沙箱
+    if self.thread_data:
+        state["thread_data"] = self.thread_data # 继承工作目录
+    return state
+```
+
+然后 SubAgent 在自己的上下文中**自主执行多轮 Tool Call**：
+- 读取文件 → 分析 → 搜索 → 再读取 → 总结
+- 所有中间推理**不污染** Lead Agent 的对话窗口
+- 最终只返回结果摘要
+
+### 3.8 完整数据流图
+
+```mermaid
+flowchart LR
+    A["<b>开发者定义</b><br/>task_tool()<br/>+ docstring"]
+    B["<b>JSON Schema</b><br/>工具名 / 用途描述<br/>参数名 / 参数说明"]
+    C["<b>发送 LLM</b><br/>tools 字段<br/>+ 编排指南 prompt"]
+    D["<b>ToolCall</b><br/>{name, args, id}"]
+    E["<b>解析 &amp; 注入</b><br/>拆分 args + id<br/>注入 tool_call_id<br/>Pydantic 校验"]
+    F["<b>SubAgent</b><br/>独立 Agent 实例<br/>后台多轮执行"]
+    G["<b>结果返回</b><br/>摘要文本<br/>注入 Lead Agent 上下文"]
+
+    A -->|"Schema 生成"| B
+    B -->|"组装请求"| C
+    C -->|"LLM 决策"| D
+    D -->|"参数提取"| E
+    E -->|"创建 &amp; 启动"| F
+    F -->|"轮询获取"| G
+
+    style A fill:#16213e,stroke:#e94560,color:#eee
+    style B fill:#0f3460,stroke:#4a90d9,color:#eee
+    style C fill:#1a1a2e,stroke:#7c3aed,color:#eee
+    style D fill:#0f3460,stroke:#0ea5e9,color:#eee
+    style E fill:#1a1a2e,stroke:#f59e0b,color:#eee
+    style F fill:#0f3460,stroke:#10b981,color:#eee
+    style G fill:#16213e,stroke:#e94560,color:#eee
+```
+
+### 3.9 关键设计要点
+
+| 设计点 | 实现方式 | 原因 |
+|--------|---------|------|
+| **docstring 驱动 Schema** | `parse_docstring=True` + Google-style docstring | docstring 的 summary 成为工具描述（给 LLM 看用途），`Args:` 段落成为参数描述（给 LLM 看每个参数怎么填），无需手写 JSON Schema |
+| **注入参数自动过滤** | `InjectedToolCallId`、`ToolRuntime` 标记 | 这些参数由框架注入，LLM 不需要也不能提供它们，Schema 生成时自动排除 |
+| **条件性工具暴露** | `SUBAGENT_TOOLS` 仅在 `subagent_enabled=True` 时加入 | 防止普通模式下 LLM 误用 task；配合 `<subagent_system>` prompt 同步注入，确保 LLM 在正确的上下文中使用 |
+| **防止递归嵌套** | SubAgent 创建时 `subagent_enabled=False` | SubAgent 的工具列表不包含 `task`，无法再创建子代理 |
+| **tool_call_id 即 task_id** | `execute_async(prompt, task_id=tool_call_id)` | 将 LangChain 框架的 tool_call_id 复用为 SubAgent 的 task_id，实现端到端追踪 |
+| **上下文继承与隔离** | SubAgent 继承 sandbox/thread_data，但使用独立 Agent 实例 | 共享环境（沙箱、工作目录），但隔离对话上下文（Lead Agent 看不到 SubAgent 的中间推理） |
+
+---
+
+## 四、SubAgent 系统详细设计
 
 ### 3.1 架构层次图
 
@@ -319,7 +707,7 @@ async for chunk in agent.astream(state, ...):
 
 ---
 
-## 四、两种内置 SubAgent 对比
+## 五、两种内置 SubAgent 对比
 
 | 维度 | general-purpose | bash |
 |------|----------------|------|
@@ -346,7 +734,7 @@ def _filter_tools(all_tools, allowed, disallowed):
 
 ---
 
-## 五、并发控制：双重保险
+## 六、并发控制：双重保险
 
 DeerFlow 采用 **Prompt 层 + 中间件层** 双重机制控制 SubAgent 并发数：
 
@@ -390,7 +778,7 @@ class SubagentLimitMiddleware(AgentMiddleware):
 
 ---
 
-## 六、状态传递与继承
+## 七、状态传递与继承
 
 SubAgent 继承父 Agent 的关键运行时状态：
 
@@ -417,7 +805,7 @@ def _build_initial_state(self, task):
 
 ---
 
-## 七、Streaming 与实时反馈
+## 八、Streaming 与实时反馈
 
 `task_tool` 通过 `get_stream_writer()` 向前端推送 SSE 事件，实现 SubAgent 执行进度的实时可视化：
 
@@ -434,7 +822,7 @@ def _build_initial_state(self, task):
 
 ---
 
-## 八、关键设计决策总结
+## 九、关键设计决策总结
 
 | 决策 | 方案 | 理由 |
 |------|------|------|
@@ -448,7 +836,7 @@ def _build_initial_state(self, task):
 
 ---
 
-## 九、源码文件索引
+## 十、源码文件索引
 
 | 文件 | 核心内容 |
 |------|---------|
@@ -466,7 +854,7 @@ def _build_initial_state(self, task):
 
 ---
 
-## 十、动手实验建议
+## 十一、动手实验建议
 
 1. **开启 SubAgent 模式**：在请求参数中设置 `subagent_enabled=True`，发送一个复杂研究问题，观察 LangSmith trace 中 Lead Agent 如何拆分子任务。
 
